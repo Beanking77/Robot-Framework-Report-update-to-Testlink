@@ -9,12 +9,13 @@ import xmlrpclib
 import argparse
 from time import strftime
 from xml.etree.ElementTree import ElementTree
+from robot.api import ExecutionResult
 
 
 class RobotI:
     def __init__(self):
-        os.environ['TESTLINK_API_PYTHON_SERVER_URL'] = "{Your testlink url}/lib/api/xmlrpc/v1/xmlrpc.php"
-        os.environ['TESTLINK_API_PYTHON_DEVKEY'] = "{Tour testlink dev api key}"
+        #os.environ['TESTLINK_API_PYTHON_SERVER_URL'] = "{Your testlink url}/lib/api/xmlrpc/v1/xmlrpc.php"
+        #os.environ['TESTLINK_API_PYTHON_DEVKEY'] = "{Your testlink dev api key}"
         tl_helper = testlink.TestLinkHelper()
         self.testlinker = tl_helper.connect(testlink.TestlinkAPIClient)
 
@@ -31,7 +32,7 @@ class RobotI:
                     break
             return PLid
         except IOError as e:
-            print "I/O error({0}): {1}".format(e.errno, e.strerror)
+            print "getTestPlanPlatformsIDByName I/O error({0}): {1}".format(e.errno, e.strerror)
         except testlink.testlinkerrors.TLResponseError as e:
             print "TestLink error({0}): {1}".format(e.code, e.message)
             return False
@@ -45,6 +46,9 @@ class RobotI:
     def getTestProjectIDByName(self, project_name):
         return self.testlinker.getTestProjectByName(project_name)['id']
 
+    def getTestCaseIDByName(self, testcase_name, project_name):
+        return self.testlinker.getTestCaseIDByName(testcase_name ,testprojectname=project_name)[0]['id']
+
     def getTestProjectPrefixByName(self, project_name):
         return self.testlinker.getTestProjectByName(project_name)['prefix']
 
@@ -56,7 +60,7 @@ class RobotI:
             tp = self.testlinker.getTestPlanByName(project_name, test_plan_name)
             return tp[0]['id']
         except IOError as e:
-            print "I/O error({0}): {1}".format(e.errno, e.strerror)
+            print "getTestPlanIDByName I/O error({0}): {1}".format(e.errno, e.strerror)
         except testlink.testlinkerrors.TLResponseError as e:
             print "TestLink error({0}): {1}".format(e.code, e.message)
             return False
@@ -78,7 +82,7 @@ class RobotI:
             else:
                 return self.existingBuild(testplanid)
         except IOError as e:
-            print "I/O error({0}): {1}".format(e.errno, e.strerror)
+            print "createBuild I/O error({0}): {1}".format(e.errno, e.strerror)
         except testlink.testlinkerrors.TLResponseError as e:
             print "TestLink error({0}): {1}".format(e.code, e.message)
             return False
@@ -94,7 +98,7 @@ class RobotI:
             tc_info = self.testlinker.getTestCase(testcaseexternalid=externalTestCaseID)
             return tc_info[0]['testcase_id']
         except IOError as e:
-            print "I/O error({0}): {1}".format(e.errno, e.strerror)
+            print "getInternalTestcaseID I/O error({0}): {1}".format(e.errno, e.strerror)
         except testlink.testlinkerrors.TLResponseError as e:
             print "TestLink error({0}): {1}".format(e.code, e.message)
             return False
@@ -110,7 +114,7 @@ class RobotI:
             existingBuild = self.testlinker.getLatestBuildForTestPlan(testplanid)
             return existingBuild['id']
         except IOError as e:
-            print "I/O error({0}): {1}".format(e.errno, e.strerror)
+            print "existingBuild I/O error({0}): {1}".format(e.errno, e.strerror)
         except testlink.testlinkerrors.TLResponseError as e:
             print "TestLink error({0}): {1}".format(e.code, e.message)
             return False
@@ -140,18 +144,17 @@ class TestlinkFeeder:
             project_prefix_name = self.robotI.getTestProjectPrefixByName(self.project_name)
 
             tcIntID = ""
-            tree = ElementTree()
-            tree.parse(RFreport)
-            elements = tree.find("statistics/tag")
-            for i in elements:
-                if i.text.isdigit():
-                    tcIntID = self.robotI.getInternalTestcaseID(project_prefix_name + "-" + i.text)
-                    if int(i.attrib["fail"]) != 0:
-                        self.testcase_id_result_dict['f'].append(tcIntID)
+            suite = ExecutionResult(RFreport).suite
+    
+            for test_cases in suite.suites: # through all the tests
+                for test in test_cases.tests:
+                    tcIntID = self.robotI.getTestCaseIDByName(test.name, self.project_name)
+                    if test.status == "PASS":
+                        self.testcase_id_result_dict['p'].append([test.name, tcIntID])
                     else:
-                        self.testcase_id_result_dict['p'].append(tcIntID)
+                        self.testcase_id_result_dict['f'].append([test.name, tcIntID])
         except IOError as e:
-            print "I/O error({0}): {1}".format(e.errno, e.strerror)
+            print "parseRFreport I/O error({0}): {1}".format(e.errno, e.strerror)
         except testlink.testlinkerrors.TLResponseError as e:
             print "TestLink error({0}): {1}".format(e.code, e.message)
             return False
@@ -163,9 +166,10 @@ class TestlinkFeeder:
             raise
 
     def reportTCResult(self):
-        for testcase_result, testcase_ids in self.testcase_id_result_dict.items():
-            for testcase_id in testcase_ids:
-                self.robotI.testlinker.reportTCResult(testcase_id, self.TPid, self.build_name, testcase_result, self.PLid, platformid=self.PLid)
+        for name, pass_id in self.testcase_id_result_dict["p"]:
+            self.robotI.testlinker.reportTCResult(pass_id, self.TPid, self.build_name, "p", '')
+        for name, pass_id in self.testcase_id_result_dict["f"]:
+            self.robotI.testlinker.reportTCResult(pass_id, self.TPid, self.build_name, "f", '')
 
 
 if __name__ == "__main__":
@@ -182,3 +186,10 @@ if __name__ == "__main__":
     testlink_feeder = TestlinkFeeder(args.project, args.testplan, args.platform, args.build)
     testlink_feeder.parseRFreport(args.file)
     testlink_feeder.reportTCResult()
+    print('\nSuccessful update result: \nTestlink: ' + os.environ['TESTLINK_API_PYTHON_SERVER_URL'] + '\nReport: ' + args.file)
+    print("====PASS====")
+    for name, result in testlink_feeder.testcase_id_result_dict['p']:
+        print(name)
+    print("====FAIL====")
+    for name, result in testlink_feeder.testcase_id_result_dict['f']:
+        print(name)
