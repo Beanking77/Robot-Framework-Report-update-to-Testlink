@@ -9,7 +9,7 @@ import xmlrpclib
 import argparse
 from time import strftime
 from xml.etree.ElementTree import ElementTree
-from robot.api import ExecutionResult
+from robot.api import ExecutionResult, ResultVisitor
 
 
 class RobotI:
@@ -32,7 +32,8 @@ class RobotI:
                     break
             return PLid
         except IOError as e:
-            print "getTestPlanPlatformsIDByName I/O error({0}): {1}".format(e.errno, e.strerror)
+            errno, strerror = e.args
+            print "getTestPlanPlatformsIDByName I/O error({0}): {1}".format(errno, strerror)
         except testlink.testlinkerrors.TLResponseError as e:
             print "TestLink error({0}): {1}".format(e.code, e.message)
             return False
@@ -60,7 +61,8 @@ class RobotI:
             tp = self.testlinker.getTestPlanByName(project_name, test_plan_name)
             return tp[0]['id']
         except IOError as e:
-            print "getTestPlanIDByName I/O error({0}): {1}".format(e.errno, e.strerror)
+            errno, strerror = e.args
+            print "getTestPlanIDByName I/O error({0}): {1}".format(errno, strerror)
         except testlink.testlinkerrors.TLResponseError as e:
             print "TestLink error({0}): {1}".format(e.code, e.message)
             return False
@@ -82,7 +84,8 @@ class RobotI:
             else:
                 return self.existingBuild(testplanid)
         except IOError as e:
-            print "createBuild I/O error({0}): {1}".format(e.errno, e.strerror)
+            errno, strerror = e.args
+            print "createBuild I/O error({0}): {1}".format(errno, strerror)
         except testlink.testlinkerrors.TLResponseError as e:
             print "TestLink error({0}): {1}".format(e.code, e.message)
             return False
@@ -98,7 +101,8 @@ class RobotI:
             tc_info = self.testlinker.getTestCase(testcaseexternalid=externalTestCaseID)
             return tc_info[0]['testcase_id']
         except IOError as e:
-            print "getInternalTestcaseID I/O error({0}): {1}".format(e.errno, e.strerror)
+            errno, strerror = e.args
+            print "getInternalTestcaseID I/O error({0}): {1}".format(errno, strerror)
         except testlink.testlinkerrors.TLResponseError as e:
             print "TestLink error({0}): {1}".format(e.code, e.message)
             return False
@@ -114,7 +118,8 @@ class RobotI:
             existingBuild = self.testlinker.getLatestBuildForTestPlan(testplanid)
             return existingBuild['id']
         except IOError as e:
-            print "existingBuild I/O error({0}): {1}".format(e.errno, e.strerror)
+            errno, strerror = e.args
+            print "existingBuild I/O error({0}): {1}".format(errno, strerror)
         except testlink.testlinkerrors.TLResponseError as e:
             print "TestLink error({0}): {1}".format(e.code, e.message)
             return False
@@ -125,6 +130,14 @@ class RobotI:
             print "Unexpected error:", sys.exc_info()[0]
             raise
 
+class PrintTestInfo(ResultVisitor):
+
+    def visit_test(self, test):
+        if test.status == "PASS":
+            testcase_id_result_dict['p'].append([test.name, test.status])
+        else:
+            testcase_id_result_dict['f'].append([test.name, test.status])
+
 
 class TestlinkFeeder:
     def __init__(self, project_name, testplan_name, platform_name, build_name):
@@ -134,7 +147,8 @@ class TestlinkFeeder:
         self.PLid = self.robotI.getTestPlanPlatformsIDByName(self.TPid, platform_name)
         self.Bid = self.robotI.createBuild(self.TPid, build_name, '')
         self.build_name = build_name
-        self.testcase_id_result_dict = {
+        global testcase_id_result_dict
+        testcase_id_result_dict = {
             "f": [],
             "p": []
         }
@@ -144,17 +158,22 @@ class TestlinkFeeder:
             project_prefix_name = self.robotI.getTestProjectPrefixByName(self.project_name)
 
             tcIntID = ""
-            suite = ExecutionResult(RFreport).suite
-    
-            for test_cases in suite.suites: # through all the tests
-                for test in test_cases.tests:
-                    tcIntID = self.robotI.getTestCaseIDByName(test.name, self.project_name)
-                    if test.status == "PASS":
-                        self.testcase_id_result_dict['p'].append([test.name, tcIntID])
-                    else:
-                        self.testcase_id_result_dict['f'].append([test.name, tcIntID])
+            result = ExecutionResult(RFreport)
+            result.visit(PrintTestInfo())
+            pass_index = 0
+            fail_index = 0
+            for name, result in testcase_id_result_dict['p']:
+                tcIntID = self.robotI.getTestCaseIDByName(name, self.project_name)
+                testcase_id_result_dict['p'][pass_index][1] = tcIntID
+                pass_index += 1
+            for name, result in testcase_id_result_dict['f']:
+                tcIntID = self.robotI.getTestCaseIDByName(name, self.project_name)
+                testcase_id_result_dict['f'][fail_index][1] = tcIntID
+                fail_index += 1
+                
         except IOError as e:
-            print "parseRFreport I/O error({0}): {1}".format(e.errno, e.strerror)
+            errno, strerror = e.args
+            print "parseRFreport I/O error({0}): {1}".format(errno, strerror)
         except testlink.testlinkerrors.TLResponseError as e:
             print "TestLink error({0}): {1}".format(e.code, e.message)
             return False
@@ -166,9 +185,9 @@ class TestlinkFeeder:
             raise
 
     def reportTCResult(self):
-        for name, pass_id in self.testcase_id_result_dict["p"]:
+        for name, pass_id in testcase_id_result_dict["p"]:
             self.robotI.testlinker.reportTCResult(pass_id, self.TPid, self.build_name, "p", '')
-        for name, pass_id in self.testcase_id_result_dict["f"]:
+        for name, pass_id in testcase_id_result_dict["f"]:
             self.robotI.testlinker.reportTCResult(pass_id, self.TPid, self.build_name, "f", '')
 
 
@@ -188,8 +207,8 @@ if __name__ == "__main__":
     testlink_feeder.reportTCResult()
     print('\nSuccessful update result: \nTestlink: ' + os.environ['TESTLINK_API_PYTHON_SERVER_URL'] + '\nReport: ' + args.file)
     print("====PASS====")
-    for name, result in testlink_feeder.testcase_id_result_dict['p']:
+    for name, result in testcase_id_result_dict['p']:
         print(name)
     print("====FAIL====")
-    for name, result in testlink_feeder.testcase_id_result_dict['f']:
+    for name, result in testcase_id_result_dict['f']:
         print(name)
